@@ -1,0 +1,86 @@
+#!/bin/bash
+
+# Tên tệp ISO và đĩa ảo
+WIN_ISO="win.iso"
+VIRTIO_ISO="virtio.iso"
+DISK_IMAGE="nvme_disk.qcow2"
+DISK_SIZE="100G"
+
+echo "Bắt đầu quá trình tự động hóa cài đặt QEMU và Windows..."
+
+# 1. Tải xuống tệp ISO Windows
+echo "Đang tải xuống tệp ISO Windows..."
+if [ ! -f "$WIN_ISO" ]; then
+    wget -O "$WIN_ISO" https://archive.org/download/win10pro1909.752liteplusoprekin.com/Win10Pro_1909.752_LitePlus_oprekin.com.iso
+    if [ $? -ne 0 ]; then
+        echo "Lỗi: Không thể tải xuống $WIN_ISO. Vui lòng kiểm tra kết nối mạng hoặc URL."
+        exit 1
+    fi
+else
+    echo "Tệp $WIN_ISO đã tồn tại, bỏ qua tải xuống."
+fi
+
+# 2. Tải xuống tệp ISO VirtIO Drivers
+echo "Đang tải xuống tệp ISO VirtIO Drivers..."
+if [ ! -f "$VIRTIO_ISO" ]; then
+    wget -O "$VIRTIO_ISO" https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.240-1/virtio-win-0.1.240.iso
+    if [ $? -ne 0 ]; then
+        echo "Lỗi: Không thể tải xuống $VIRTIO_ISO. Vui lòng kiểm tra kết nối mạng hoặc URL."
+        exit 1
+    fi
+else
+    echo "Tệp $VIRTIO_ISO đã tồn tại, bỏ qua tải xuống."
+fi
+
+# 3. Cập nhật hệ thống và cài đặt QEMU/KVM
+echo "Đang cập nhật hệ thống và cài đặt QEMU/KVM..."
+sudo apt update
+if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cập nhật apt. Vui lòng kiểm tra kho lưu trữ hoặc kết nối mạng."
+    exit 1
+fi
+sudo apt install qemu-kvm -y
+if [ $? -ne 0 ]; then
+    echo "Lỗi: Không thể cài đặt qemu-kvm. Vui lòng kiểm tra gói hoặc quyền sudo."
+    exit 1
+fi
+
+# 4. Tạo đĩa ảo QCOW2
+echo "Đang tạo đĩa ảo $DISK_IMAGE kích thước $DISK_SIZE..."
+if [ ! -f "$DISK_IMAGE" ]; then
+    qemu-img create -f qcow2 "$DISK_IMAGE" "$DISK_SIZE"
+    if [ $? -ne 0 ]; then
+        echo "Lỗi: Không thể tạo đĩa ảo $DISK_IMAGE. Vui lòng kiểm tra dung lượng đĩa."
+        exit 1
+    fi
+else
+    echo "Đĩa ảo $DISK_IMAGE đã tồn tại, bỏ qua tạo mới."
+fi
+
+# 5. Khởi động máy ảo QEMU
+echo "Đang khởi động máy ảo QEMU..."
+echo "Bạn có thể kết nối tới máy ảo qua VNC client tại localhost:5900 (hoặc IP_của_máy_chủ:5900)."
+
+sudo qemu-system-x86_64 \
+-M q35,nvdimm=on \
+-usb -device qemu-xhci -device usb-tablet -device usb-kbd \
+-cpu host,hv-time,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,kvm=on,+invtsc,migratable=off,+hypervisor,hv-vendor-id=nvidia \
+-smp sockets=1,cores=4,threads=1 \
+-m 8192M \
+-drive file="$WIN_ISO",media=cdrom,if=none,id=cdrom0 -device ide-cd,drive=cdrom0,bus=ide.0 \
+-drive file="$VIRTIO_ISO",media=cdrom,if=none,id=cdrom1 -device ide-cd,drive=cdrom1,bus=ide.1 \
+-drive file="$DISK_IMAGE",if=none,id=disk0 \
+-device virtio-blk-pci,drive=disk0 \
+-vga virtio -device virtio-net-pci,netdev=n0 -netdev user,id=n0 \
+-accel kvm -device virtio-serial-pci -boot d,menu=on -device intel-iommu -vnc :0 -daemonize
+
+if [ $? -ne 0 ]; then
+    echo "Lỗi: QEMU không thể khởi động. Vui lòng kiểm tra lại các tham số hoặc cài đặt KVM."
+    exit 1
+else
+    echo "Máy ảo QEMU đã được khởi động thành công ở chế độ nền (daemonize)."
+    echo "Sử dụng 'ps aux | grep qemu' để kiểm tra tiến trình."
+    echo "Để dừng máy ảo, bạn có thể tìm PID của tiến trình qemu và dùng 'sudo kill <PID>'."
+fi
+
+echo "Quá trình hoàn tất."
