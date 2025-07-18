@@ -1,0 +1,59 @@
+import subprocess
+import shlex
+
+def chay_may_ao_qemu(
+    duong_dan_iso_win="win.iso",
+    duong_dan_iso_virtio="virtio.iso",
+    duong_dan_o_dia="nvme_disk.qcow2",
+    man_hinh_vnc=":0"
+):
+    """
+    Chạy một máy ảo QEMU với cấu hình đã chỉ định.
+
+    Args:
+        duong_dan_iso_win (str): Đường dẫn đến file ảnh ISO của Windows.
+        duong_dan_iso_virtio (str): Đường dẫn đến file ảnh ISO driver VirtIO.
+        duong_dan_o_dia (str): Đường dẫn đến file ảnh đĩa QCOW2.
+        man_hinh_vnc (str): Địa chỉ hiển thị VNC (ví dụ: ":0").
+    """
+    lenh_qemu = (
+        "sudo qemu-system-x86_64 "
+        "-M q35,nvdimm=on "
+        "-usb -device qemu-xhci -device usb-tablet -device usb-kbd "
+        "-cpu host,hv-time,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,kvm=on,+invtsc,migratable=off,+hypervisor,hv-vendor-id=nvidia "
+        "-smp sockets=1,cores=4,threads=1 "
+        "-m 8192M "
+        f"-drive file={duong_dan_iso_win},media=cdrom,if=none,id=cdrom0 -device ide-cd,drive=cdrom0,bus=ide.0 "
+        f"-drive file={duong_dan_iso_virtio},media=cdrom,if=none,id=cdrom1 -device ide-cd,drive=cdrom1,bus=ide.1 "
+        f"-drive file={duong_dan_o_dia},if=none,id=disk0 "
+        "-device virtio-blk-pci,drive=disk0 "
+        "-vga virtio -device virtio-net-pci,netdev=n0 -netdev user,id=n0 "
+        "-accel kvm -device virtio-serial-pci -boot d,menu=on -device intel-iommu "
+        f"-vnc {man_hinh_vnc} -daemonize"
+    )
+
+    print(f"Đang thực thi lệnh QEMU:\n{lenh_qemu}\n")
+
+    try:
+        # shlex.split xử lý việc chia lệnh thành các đối số một cách chính xác
+        process = subprocess.run(shlex.split(lenh_qemu), check=True, capture_output=True, text=True)
+        print("Máy ảo QEMU đã khởi động thành công.")
+        if process.stdout:
+            print("STDOUT:", process.stdout)
+        if process.stderr:
+            print("STDERR:", process.stderr)
+    except subprocess.CalledProcessError as e:
+        print(f"Lỗi khi khởi động máy ảo QEMU: {e}")
+        print("STDOUT:", e.stdout)
+        print("STDERR:", e.stderr)
+    except FileNotFoundError:
+        print("Lỗi: Không tìm thấy lệnh qemu-system-x86_64. Hãy đảm bảo QEMU đã được cài đặt và có trong PATH của bạn.")
+
+if __name__ == "__main__":
+    # Bạn có thể tùy chỉnh các đường dẫn này hoặc biến chúng thành đối số của script
+    iso_windows = "win.iso"
+    iso_driver_virtio = "virtio.iso"
+    anh_o_dia_nvme = "nvme_disk.qcow2"
+    dia_chi_vnc = ":0" # Hoặc ":1" cho màn hình thứ hai, v.v.
+
+    chay_may_ao_qemu(iso_windows, iso_driver_virtio, anh_o_dia_nvme, dia_chi_vnc)
