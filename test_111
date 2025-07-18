@@ -1,0 +1,134 @@
+import subprocess
+import os
+import sys
+import time
+
+# Tên tệp ISO và đĩa ảo
+WIN_ISO = "win.iso"
+VIRTIO_ISO = "virtio.iso"
+DISK_IMAGE = "nvme_disk.qcow2"
+DISK_SIZE = "100G"
+
+def run_command(command, check_error=True, sudo_required=False):
+    """
+    Chạy một lệnh shell và in ra thông báo.
+    Nếu check_error là True, sẽ thoát nếu lệnh thất bại.
+    """
+    if sudo_required and os.geteuid() != 0:
+        print(f"Lỗi: Lệnh '{' '.join(command)}' yêu cầu quyền sudo. Vui lòng chạy script với sudo.")
+        sys.exit(1)
+
+    print(f"Đang thực thi: {' '.join(command)}")
+    try:
+        process = subprocess.run(command, check=check_error, capture_output=True, text=True)
+        if check_error and process.returncode != 0:
+            print(f"Lỗi khi thực thi lệnh: {' '.join(command)}")
+            print(f"Stdout: {process.stdout}")
+            print(f"Stderr: {process.stderr}")
+            sys.exit(1)
+        return process.stdout
+    except FileNotFoundError:
+        print(f"Lỗi: Lệnh '{command[0]}' không tìm thấy. Đảm bảo nó đã được cài đặt và có trong PATH.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Lỗi không mong muốn khi thực thi lệnh '{' '.join(command)}': {e}")
+        sys.exit(1)
+
+def main():
+    print("Bắt đầu quá trình tự động hóa cài đặt QEMU và Windows (Python)...")
+
+    # 1. Tải xuống tệp ISO Windows
+    print("Đang tải xuống tệp ISO Windows...")
+    if not os.path.exists(WIN_ISO):
+        run_command(["wget", "-O", WIN_ISO, "https://archive.org/download/win10pro1909.752liteplusoprekin.com/Win10Pro_1909.752_LitePlus_oprekin.com.iso"])
+    else:
+        print(f"Tệp {WIN_ISO} đã tồn tại, bỏ qua tải xuống.")
+
+    # 2. Tải xuống tệp ISO VirtIO Drivers
+    print("Đang tải xuống tệp ISO VirtIO Drivers...")
+    if not os.path.exists(VIRTIO_ISO):
+        run_command(["wget", "-O", VIRTIO_ISO, "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.240-1/virtio-win-0.1.240.iso"])
+    else:
+        print(f"Tệp {VIRTIO_ISO} đã tồn tại, bỏ qua tải xuống.")
+
+    # 3. Cập nhật hệ thống và cài đặt QEMU/KVM
+    print("Đang cập nhật hệ thống và cài đặt QEMU/KVM...")
+    # Kiểm tra quyền sudo trước khi chạy apt
+    if os.geteuid() != 0:
+        print("Cảnh báo: Các lệnh 'apt' và 'qemu-system-x86_64' yêu cầu quyền sudo.")
+        print("Vui lòng chạy script này với 'sudo python3 <tên_script.py>'")
+        sys.exit(1)
+
+    run_command(["apt", "update"], sudo_required=True)
+    run_command(["apt", "install", "qemu-kvm", "-y"], sudo_required=True)
+
+    # 4. Tạo đĩa ảo QCOW2
+    print(f"Đang tạo đĩa ảo {DISK_IMAGE} kích thước {DISK_SIZE}...")
+    if not os.path.exists(DISK_IMAGE):
+        run_command(["qemu-img", "create", "-f", "qcow2", DISK_IMAGE, DISK_SIZE])
+    else:
+        print(f"Đĩa ảo {DISK_IMAGE} đã tồn tại, bỏ qua tạo mới.")
+
+    # 5. Khởi động máy ảo QEMU
+    print("Đang khởi động máy ảo QEMU...")
+    print("Bạn có thể kết nối tới máy ảo qua VNC client tại localhost:5900 (hoặc IP_của_máy_chủ:5900).")
+
+    qemu_command = [
+        "qemu-system-x86_64",
+        "-M", "q35,nvdimm=on",
+        "-usb", "-device", "qemu-xhci", "-device", "usb-tablet", "-device", "usb-kbd",
+        "-cpu", "host,hv-time,hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,kvm=on,+invtsc,migratable=off,+hypervisor,hv-vendor-id=nvidia",
+        "-smp", "sockets=1,cores=4,threads=1",
+        "-m", "8192M",
+        "-drive", f"file={WIN_ISO},media=cdrom,if=none,id=cdrom0", "-device", "ide-cd,drive=cdrom0,bus=ide.0",
+        "-drive", f"file={VIRTIO_ISO},media=cdrom,if=none,id=cdrom1", "-device", "ide-cd,drive=cdrom1,bus=ide.1",
+        "-drive", f"file={DISK_IMAGE},if=none,id=disk0",
+        "-device", "virtio-blk-pci,drive=disk0",
+        "-vga", "virtio", "-device", "virtio-net-pci,netdev=n0", "-netdev", "user,id=n0",
+        "-accel", "kvm", "-device", "virtio-serial-pci", "-boot", "d,menu=on", "-device", "intel-iommu",
+        "-vnc", ":0", "-daemonize"
+    ]
+
+    # Chạy lệnh QEMU. Daemonize nên không cần check_error ngay lập tức.
+    try:
+        subprocess.Popen(qemu_command)
+        print("Máy ảo QEMU đã được khởi động thành công ở chế độ nền (daemonize).")
+        print("Sử dụng 'ps aux | grep qemu' để kiểm tra tiến trình.")
+        print("Để dừng máy ảo, bạn có thể tìm PID của tiến trình qemu và dùng 'sudo kill <PID>' hoặc 'sudo pkill qemu-system-x86_64'.")
+    except FileNotFoundError:
+        print(f"Lỗi: Lệnh '{qemu_command[0]}' không tìm thấy. Đảm bảo QEMU đã được cài đặt.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Lỗi không mong muốn khi khởi động QEMU: {e}")
+        sys.exit(1)
+
+    # 6. Thiết lập SSH tunnel qua Pinggy.io
+    print("\nĐang thiết lập SSH tunnel qua Pinggy.io để truy cập VNC từ xa...")
+    ssh_command = [
+        "ssh",
+        "-p", "443",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "ServerAliveInterval=30",
+        "-R0:127.0.0.1:5900",
+        "tcp@a.pinggy.io"
+    ]
+
+    try:
+        # Chạy lệnh SSH trong nền. Pinggy sẽ in ra URL truy cập.
+        # Sử dụng Popen để không chặn script chính.
+        print("Lưu ý: Lệnh SSH sẽ chạy trong nền. Pinggy.io sẽ in ra URL truy cập VNC công khai.")
+        print("Bạn có thể cần đợi một chút để URL xuất hiện.")
+        subprocess.Popen(ssh_command)
+        print("SSH tunnel đã được khởi tạo. Kiểm tra đầu ra của terminal để tìm URL truy cập VNC từ Pinggy.io.")
+        print("Để dừng SSH tunnel, bạn có thể tìm PID của tiến trình ssh và dùng 'kill <PID>' hoặc 'pkill ssh'.")
+    except FileNotFoundError:
+        print("Cảnh báo: Lệnh 'ssh' không tìm thấy. Không thể thiết lập SSH tunnel.")
+    except Exception as e:
+        print(f"Lỗi không mong muốn khi thiết lập SSH tunnel: {e}")
+
+    print("\nQuá trình hoàn tất.")
+    print("Máy ảo QEMU và SSH tunnel đã được khởi động.")
+    print("Kiểm tra các tiến trình đang chạy và đầu ra của Pinggy.io để biết chi tiết truy cập.")
+
+if __name__ == "__main__":
+    main()
